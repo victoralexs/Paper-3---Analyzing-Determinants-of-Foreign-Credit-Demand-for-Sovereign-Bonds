@@ -3,10 +3,7 @@ title: Estimating Heterogeneous Treatment Effects (HTE) in Randomized Data with 
   Learning Tecniques
 author: "Victor Hugo C. Alexandrino da Silva"
 date: "8/11/2021"
-output:
-  html_document:
-    df_print: paged
-  pdf_document: default
+output: rmarkdown::github_document
 ---
 
 ```{r setup, include=FALSE}
