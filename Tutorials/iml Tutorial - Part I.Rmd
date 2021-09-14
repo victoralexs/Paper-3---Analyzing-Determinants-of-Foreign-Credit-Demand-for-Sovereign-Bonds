@@ -1,0 +1,171 @@
+---
+title: "Tutorial - Learning the iml package"
+author: "Victor Hugo C. Alexandrino da Silva"
+date: "9/2/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This tutorial aims to undertand and learn about the `iml` (Interpretable Machine Learning) package. It is based on the UC Business Analytics website (http://uc-r.github.io/iml-pkg#rep), the `iml` documentation (https://christophm.github.io/iml/articles/intro.html) and the book from Christoph Molnar (https://christophm.github.io/interpretable-ml-book/)
+
+Our goal is to understand the tools for analyzing any black box machine learning model such as:
+
+- Feature importance: Which were the most important features?
+- Feature effects: How does a feature influence the prediction? (Partial dependence plots and individual conditional expectation curves)
+- Explanations for single predictions: How did the feature values of a single data point affect its prediction? (LIME and Shapley value)
+- Surrogate trees: Can we approximate the underlying black box model with a short decision tree?
+- The iml package works for any classification and regression machine learning model: random forests, linear models, neural networks, xgboost, etc.
+
+```{r}
+library(iml)
+# install.packages("mlr") # For ML models
+library(mlr)
+
+set.seed(1014)
+
+# Loading Boston house values from the MASS package database
+data("Boston", package =  "MASS")
+
+head(Boston)
+
+```
+Let's first train a randomForest to predict the Boston median house value:
+
+```{r}
+
+lrn <- makeLearner("regr.randomForest", ntree = 50)
+
+task <- makeRegrTask(data = Boston, target = "medv")
+
+rf <- train(learner = lrn, task = task)
+
+```
+
+After training our random forest `rf`, we create a `Predictor` object that holds the model and the data. Since the `iml` package uses R6 data, we can call new object by writing `Predictor$new()`:
+
+```{r}
+# Excluding our prediction variable 'medv' and building our feature set:
+X = Boston[which(names(Boston) != "medv")]
+
+# Creating the Predictor object from our trained random forest:
+predictor = Predictor$new(rf, data = X, y = Boston$medv)
+
+```
+
+Once the predictor is created, we will use this R6 class to explore the power of the `iml` package. 
+
+
+
+\section{1. Feature Importance}
+
+The function `FeatureImp` shows a measure of how important each feature was for the prediction. It shuffle each feature on the prediction measuring how much the performance drops. The way it does is up to you. In the example below, I choose to measure the loss in performance by the mean absolute error ('mae'). One could, for instance, measure the drop by the mean square error ('mse').
+
+Thus, let's create the object `imp` using the `FeatureImp` function on our `predictor` R6 class. Then, we call the `plot()` function to look at the results in a data.frame:
+
+```{r}
+imp <- FeatureImp$new(predictor, loss = "mae")
+
+library(ggplot2)
+
+plot(imp)
+
+```
+
+Looking at the results:
+
+```{r}
+imp$results
+```
+
+That is, `lstat` seems to be the variable that, after permuting it, increases the mean absolute error of prediction by a factor 4.4, with CI between 4.34 and 4.55. The feature with lowest importance is `chas`, with a factor equals to 1 (no change in mean absolute error)
+
+If we do the same using the `mse` argument:
+
+```{r}
+imp_mse <- FeatureImp$new(predictor, loss = "mse")
+
+plot(imp_mse)
+
+```
+
+Results are similar compared to `mae`. 
+
+It provides nice interpretation, by splitting how each feature increases the model error when its information is dropped. 
+  
+  
+  
+\section{2. Feature Effects}
+
+Now we are interested to see how the features influence the predicted outcome. The function `FeatureEffect` implements accumulated local effect plots, partial dependence plots and individual condition expectation curves. 
+
+Let's start with the ALE (accumulated local effects) for the feature `lstat`. The ALE shows how the prediction changes locally, when the feature is varied:
+
+```{r}
+ale <- FeatureEffect$new(predictor, feature = "lstat")
+
+ale$plot()
+
+```
+
+X-axis is indicates the distribution of `lstat` feature, showing how relevant a region is for interpretation. We have that the feature has the majority of its observations around 10. In this point, the prediction for y is around -0.25. 
+
+We can plot the partial dependence curve on another feature like `rm` by only resetting the feature, without creating a new R6 object:
+
+```{r}
+ale$set.feature("rm")
+ale$plot() 
+```
+That is, there is a decreasing effect of `lstat` in the prediction of y, but a negative effect for `rm`. The effect on prediction depends on the level of each covariate.
+
+We may may want also compute the Partial Dependence Plot (PDP) instead of the ALE:
+
+```{r}
+pdp <- FeatureEffect$new(predictor, 
+                         feature = "lstat",
+                         method = "pdp")
+
+pdp$plot()
+
+```
+Which is very similar to the ALE, since we have randomized data without heterogeneity. However, it may be the case that the PDP, by showing only marginal effects, hides the heterogeneous effect among covariates. Moreover, our data here is not correlated among each other, which bring value to the PDP.
+
+Let's, for illustration, compute the Individual Conditional Expectation (ICE) together with the PDP:
+
+```{r}
+ice <- FeatureEffect$new(predictor, 
+                         feature = "lstat",
+                         method = "pdp+ice")
+
+ice$plot()
+
+```
+
+The ICE plots display one line per instance that shows the instance's prediction changes when a feature changes. It is different from the PDP, that shows the average effect of a feature on the overall prediction. This is the PDP equivalent for individual data. 
+
+However, only the ALE predicts feature effects unbiased for the case when features are correlated with each other. 
+
+
+
+\section{3. Shapley Values}
+
+An alternative for explaining individual predictions is a method from coalitional game theory named Shapley value. Assume that for one data point, the feature values play a game together, in which they get the prediction as a payout. The Shapley value tells us how to fairly distribute the payout among the feature values.
+
+The `iml` package does that using the function `Shapley`: 
+
+```{r}
+shapley <- Shapley$new(predictor, x.interest = X[1,])
+
+mean(X$lstat)
+
+shapley$plot()
+
+```
+
+That is, the average prediction is 22.56. The feature that shows higher Shapley is `lstat` which contributes 4.98 higher than the average prediction. Similar `rm` shows a 6.575 deviation from the average prediction. 
+
+
